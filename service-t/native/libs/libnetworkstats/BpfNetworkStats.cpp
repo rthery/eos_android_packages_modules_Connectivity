@@ -23,6 +23,7 @@
 #include <utils/misc.h>
 
 #include "android-base/file.h"
+#include "android-base/properties.h"
 #include "android-base/strings.h"
 #include "android-base/unique_fd.h"
 #include "bpf/BpfMap.h"
@@ -58,6 +59,12 @@ int bpfGetUidStatsInternal(uid_t uid, Stats* stats,
 }
 
 int bpfGetUidStats(uid_t uid, Stats* stats) {
+    // Legacy kernels cannot open BPF maps. Report unsupported counters before
+    // constructing a map, whose kernel-version check would abort the caller.
+    if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
+        return -EOPNOTSUPP;
+    }
+
     BpfMapRO<uint32_t, StatsValue> appUidStatsMap(APP_UID_STATS_MAP_PATH);
 
     if (!appUidStatsMap.isValid()) {
@@ -100,6 +107,12 @@ int bpfGetIfaceStatsInternal(const char* iface, Stats* stats,
 }
 
 int bpfGetIfaceStats(const char* iface, Stats* stats) {
+    // Legacy kernels cannot open BPF maps. Report unsupported counters before
+    // constructing a map, whose kernel-version check would abort the caller.
+    if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
+        return -EOPNOTSUPP;
+    }
+
     BpfMapRO<uint32_t, StatsValue> ifaceStatsMap(IFACE_STATS_MAP_PATH);
     int ret;
     if (!ifaceStatsMap.isValid() || !ifaceStatsMap.isOk()) {
@@ -108,7 +121,7 @@ int bpfGetIfaceStats(const char* iface, Stats* stats) {
         return ret;
     }
     BpfMapRO<uint32_t, IfaceValue> ifaceIndexNameMap(IFACE_INDEX_NAME_MAP_PATH);
-    if (!ifaceIndexNameMap.isValid() || !ifaceStatsMap.isOk()) {
+    if (!ifaceIndexNameMap.isValid() || !ifaceIndexNameMap.isOk()) {
         ret = -errno;
         ALOGE("get ifaceIndexName map fd failed: %s", strerror(errno));
         return ret;
@@ -186,6 +199,12 @@ int parseBpfNetworkStatsDetailInternal(std::vector<stats_line>* lines,
 int parseBpfNetworkStatsDetail(std::vector<stats_line>* lines,
                                const std::vector<std::string>& limitIfaces, int limitTag,
                                int limitUid) {
+    // Legacy kernels cannot open BPF maps. Report unsupported counters before
+    // constructing a map, whose kernel-version check would abort the caller.
+    if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
+        return -EOPNOTSUPP;
+    }
+
     BpfMapRO<uint32_t, IfaceValue> ifaceIndexNameMap(IFACE_INDEX_NAME_MAP_PATH);
     if (!ifaceIndexNameMap.isValid()) {
         int ret = -errno;
@@ -262,6 +281,12 @@ int parseBpfNetworkStatsDevInternal(std::vector<stats_line>* lines,
 }
 
 int parseBpfNetworkStatsDev(std::vector<stats_line>* lines) {
+    // Legacy kernels cannot open BPF maps. Report unsupported counters before
+    // constructing a map, whose kernel-version check would abort the caller.
+    if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
+        return -EOPNOTSUPP;
+    }
+
     int ret = 0;
     BpfMapRO<uint32_t, IfaceValue> ifaceIndexNameMap(IFACE_INDEX_NAME_MAP_PATH);
     if (!ifaceIndexNameMap.isValid()) {

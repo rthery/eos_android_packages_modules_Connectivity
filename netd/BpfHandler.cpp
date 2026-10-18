@@ -20,6 +20,7 @@
 
 #include <linux/bpf.h>
 
+#include <android-base/properties.h>
 #include <android-base/unique_fd.h>
 #include <bpf/WaitForProgsLoaded.h>
 #include <log/log.h>
@@ -71,14 +72,18 @@ static Status initPrograms(const char* cg2_path) {
         ALOGE("Failed to open the cgroup directory: %s", strerror(ret));
         return statusFromErrno(ret, "Open the cgroup directory failed");
     }
+    // Attach failures are only expected on legacy kernels without eBPF.
+    const bool ebpfSupported = android::base::GetBoolProperty("ro.kernel.ebpf.supported", true);
     auto ret = attachProgramToCgroup(BPF_EGRESS_PROG_PATH, cg_fd, BPF_CGROUP_INET_EGRESS);
     if (!isOk(ret)) {
         ALOGE("Failed loading egress program");
+        if (ebpfSupported) return ret;
     }
 
-    auto ret2 = attachProgramToCgroup(BPF_INGRESS_PROG_PATH, cg_fd, BPF_CGROUP_INET_INGRESS);
+    ret = attachProgramToCgroup(BPF_INGRESS_PROG_PATH, cg_fd, BPF_CGROUP_INET_INGRESS);
     if (!isOk(ret)) {
         ALOGE("Failed loading ingress program");
+        if (ebpfSupported) return ret;
     }
 
     // For the devices that support cgroup socket filter, the socket filter
