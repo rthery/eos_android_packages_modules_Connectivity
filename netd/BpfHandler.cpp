@@ -18,9 +18,13 @@
 
 #include "BpfHandler.h"
 
+#include <fcntl.h>
+#include <inttypes.h>
 #include <linux/bpf.h>
+#include <unistd.h>
 
 #include <android-base/properties.h>
+#include <android-base/stringprintf.h>
 #include <android-base/unique_fd.h>
 #include <bpf/WaitForProgsLoaded.h>
 #include <log/log.h>
@@ -48,6 +52,20 @@ constexpr int TOTAL_UID_STATS_ENTRIES_LIMIT = STATS_MAP_SIZE * 0.9;
 
 static_assert(STATS_MAP_SIZE - TOTAL_UID_STATS_ENTRIES_LIMIT > 100,
               "The limit for stats map is to high, stats data may be lost due to overflow");
+
+static bool isBpfSupported() {
+    static const bool supported = base::GetBoolProperty("ro.kernel.ebpf.supported", true);
+    return supported;
+}
+
+// Kernels without eBPF tag sockets through xt_qtaguid. netd holds the fd it
+// received from the client, so the kernel resolves it in netd's file table.
+static int writeQtaguidCtrl(const std::string& command) {
+    unique_fd fd(open("/proc/net/xt_qtaguid/ctrl", O_WRONLY | O_CLOEXEC));
+    if (fd < 0) return -errno;
+    if (write(fd, command.c_str(), command.size()) != (ssize_t)command.size()) return -errno;
+    return 0;
+}
 
 static Status attachProgramToCgroup(const char* programPath, const unique_fd& cgroupFd,
                                     bpf_attach_type type) {
@@ -153,6 +171,11 @@ int BpfHandler::tagSocket(int sockFd, uint32_t tag, uid_t chargeUid, uid_t realU
         return -EPERM;
     }
 
+    if (!isBpfSupported()) {
+        return writeQtaguidCtrl(base::StringPrintf("t %d %" PRIu64 " %u", sockFd,
+                                                   (uint64_t)tag << 32, chargeUid));
+    }
+
     // The socket destroy listener only monitors on the group {INET_TCP, INET_UDP, INET6_TCP,
     // INET6_UDP}. Tagging listener unsupported socket causes that the tag can't be removed from
     // tag map automatically. Eventually, the tag map may run out of space because of dead tag
@@ -248,6 +271,8 @@ int BpfHandler::tagSocket(int sockFd, uint32_t tag, uid_t chargeUid, uid_t realU
 
 int BpfHandler::untagSocket(int sockFd) {
     std::lock_guard guard(mMutex);
+    if (!isBpfSupported()) return writeQtaguidCtrl(base::StringPrintf("u %d", sockFd));
+
     uint64_t sock_cookie = getSocketCookie(sockFd);
 
     if (sock_cookie == NONEXISTENT_COOKIE) return -errno;

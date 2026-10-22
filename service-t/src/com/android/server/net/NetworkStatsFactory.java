@@ -167,6 +167,10 @@ public class NetworkStatsFactory {
         this(ctx, new File("/proc/"), true);
     }
 
+    public NetworkStatsFactory(@NonNull Context ctx, boolean useBpfStats) {
+        this(ctx, new File("/proc/"), useBpfStats);
+    }
+
     @VisibleForTesting
     public NetworkStatsFactory(@NonNull Context ctx, File procRoot, boolean useBpfStats) {
         mStatsXtIfaceAll = new File(procRoot, "net/xt_qtaguid/iface_stat_all");

@@ -397,6 +397,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
      * mActiveUidCounterSet to avoid accessing kernel too frequently.
      */
     private SparseIntArray mActiveUidCounterSet = new SparseIntArray();
+    private final boolean mBpfSupported;
     private final IBpfMap<U32, U8> mUidCounterSetMap;
     private final IBpfMap<CookieTagMapKey, CookieTagMapValue> mCookieTagMap;
     private final IBpfMap<StatsMapKey, StatsMapValue> mStatsMapA;
@@ -535,7 +536,8 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
         final NetworkStatsService service = new NetworkStatsService(context,
                 INetd.Stub.asInterface((IBinder) context.getSystemService(Context.NETD_SERVICE)),
                 alarmManager, wakeLock, getDefaultClock(),
-                new DefaultNetworkStatsSettings(), new NetworkStatsFactory(context),
+                new DefaultNetworkStatsSettings(),
+                new NetworkStatsFactory(context, nativeIsBpfSupported()),
                 new NetworkStatsObservers(), new Dependencies());
 
         return service;
@@ -573,6 +575,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
         mLocationPermissionChecker = mDeps.makeLocationPermissionChecker(mContext);
         mInterfaceMapUpdater = mDeps.makeBpfInterfaceMapUpdater(mContext, mHandler);
         mInterfaceMapUpdater.start();
+        mBpfSupported = mDeps.isBpfSupported();
         mUidCounterSetMap = mDeps.getUidCounterSetMap();
         mCookieTagMap = mDeps.getCookieTagMap();
         mStatsMapA = mDeps.getStatsMapA();
@@ -716,6 +719,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
 
         /** Get counter sets map for each UID. */
         public IBpfMap<U32, U8> getUidCounterSetMap() {
+            if (!isBpfSupported()) return null;
             try {
                 return new BpfMap<U32, U8>(UID_COUNTERSET_MAP_PATH, BpfMap.BPF_F_RDWR,
                         U32.class, U8.class);
@@ -727,6 +731,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
 
         /** Gets the cookie tag map */
         public IBpfMap<CookieTagMapKey, CookieTagMapValue> getCookieTagMap() {
+            if (!isBpfSupported()) return null;
             try {
                 return new BpfMap<CookieTagMapKey, CookieTagMapValue>(COOKIE_TAG_MAP_PATH,
                         BpfMap.BPF_F_RDWR, CookieTagMapKey.class, CookieTagMapValue.class);
@@ -738,6 +743,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
 
         /** Gets stats map A */
         public IBpfMap<StatsMapKey, StatsMapValue> getStatsMapA() {
+            if (!isBpfSupported()) return null;
             try {
                 return new BpfMap<StatsMapKey, StatsMapValue>(STATS_MAP_A_PATH,
                         BpfMap.BPF_F_RDWR, StatsMapKey.class, StatsMapValue.class);
@@ -749,6 +755,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
 
         /** Gets stats map B */
         public IBpfMap<StatsMapKey, StatsMapValue> getStatsMapB() {
+            if (!isBpfSupported()) return null;
             try {
                 return new BpfMap<StatsMapKey, StatsMapValue>(STATS_MAP_B_PATH,
                         BpfMap.BPF_F_RDWR, StatsMapKey.class, StatsMapValue.class);
@@ -760,6 +767,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
 
         /** Gets the uid stats map */
         public IBpfMap<UidStatsMapKey, StatsMapValue> getAppUidStatsMap() {
+            if (!isBpfSupported()) return null;
             try {
                 return new BpfMap<UidStatsMapKey, StatsMapValue>(APP_UID_STATS_MAP_PATH,
                         BpfMap.BPF_F_RDWR, UidStatsMapKey.class, StatsMapValue.class);
@@ -767,6 +775,11 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
                 Log.wtf(TAG, "Cannot open app uid stats map: " + e);
                 return null;
             }
+        }
+
+        /** Gets whether the kernel supports eBPF traffic accounting. */
+        public boolean isBpfSupported() {
+            return nativeIsBpfSupported();
         }
 
         /** Gets whether the build is userdebug. */
@@ -1708,6 +1721,11 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
     }
 
     private void setKernelCounterSet(int uid, int set) {
+        if (!mBpfSupported) {
+            final int ret = nativeQtaguidSetCounterSet(uid, set);
+            if (ret < 0) Log.w(TAG, "qtaguid counter set for " + uid + " failed: " + ret);
+            return;
+        }
         if (mUidCounterSetMap == null) {
             Log.wtf(TAG, "Fail to set UidCounterSet: Null bpf map");
             return;
@@ -2421,6 +2439,11 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
      * @param uid
      */
     private void deleteKernelTagData(int uid) {
+        if (!mBpfSupported) {
+            final int ret = nativeQtaguidDeleteTagData(uid);
+            if (ret < 0) Log.w(TAG, "qtaguid delete for " + uid + " failed: " + ret);
+            return;
+        }
         if(mCookieTagMap == null) return;
         try {
             mCookieTagMap.forEach((key, value) -> {
@@ -3109,4 +3132,7 @@ public class NetworkStatsService extends INetworkStatsService.Stub {
     private static native long nativeGetTotalStat(int type);
     private static native long nativeGetIfaceStat(String iface, int type);
     private static native long nativeGetUidStat(int uid, int type);
+    private static native boolean nativeIsBpfSupported();
+    private static native int nativeQtaguidSetCounterSet(int uid, int set);
+    private static native int nativeQtaguidDeleteTagData(int uid);
 }

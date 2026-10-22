@@ -25,8 +25,13 @@
 #include <nativehelper/ScopedUtfChars.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include <utils/Log.h>
 #include <utils/misc.h>
+
+#include <android-base/properties.h>
+#include <android-base/stringprintf.h>
+#include <android-base/unique_fd.h>
 
 #include "bpf/BpfUtils.h"
 #include "netdbpf/BpfNetworkStats.h"
@@ -102,10 +107,32 @@ static jlong getUidStat(JNIEnv* env, jclass clazz, jint uid, jint type) {
     }
 }
 
+static jboolean isBpfSupported(JNIEnv* env, jclass clazz) {
+    return android::base::GetBoolProperty("ro.kernel.ebpf.supported", true);
+}
+
+static int writeQtaguidCtrl(const std::string& command) {
+    android::base::unique_fd fd(open("/proc/net/xt_qtaguid/ctrl", O_WRONLY | O_CLOEXEC));
+    if (fd < 0) return -errno;
+    if (write(fd, command.c_str(), command.size()) != (ssize_t)command.size()) return -errno;
+    return 0;
+}
+
+static jint qtaguidSetCounterSet(JNIEnv* env, jclass clazz, jint uid, jint set) {
+    return writeQtaguidCtrl(android::base::StringPrintf("s %d %d", set, uid));
+}
+
+static jint qtaguidDeleteTagData(JNIEnv* env, jclass clazz, jint uid) {
+    return writeQtaguidCtrl(android::base::StringPrintf("d 0 %d", uid));
+}
+
 static const JNINativeMethod gMethods[] = {
         {"nativeGetTotalStat", "(I)J", (void*)getTotalStat},
         {"nativeGetIfaceStat", "(Ljava/lang/String;I)J", (void*)getIfaceStat},
         {"nativeGetUidStat", "(II)J", (void*)getUidStat},
+        {"nativeIsBpfSupported", "()Z", (void*)isBpfSupported},
+        {"nativeQtaguidSetCounterSet", "(II)I", (void*)qtaguidSetCounterSet},
+        {"nativeQtaguidDeleteTagData", "(I)I", (void*)qtaguidDeleteTagData},
 };
 
 int register_android_server_net_NetworkStatsService(JNIEnv* env) {

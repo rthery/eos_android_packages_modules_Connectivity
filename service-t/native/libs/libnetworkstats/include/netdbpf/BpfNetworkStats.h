@@ -56,6 +56,10 @@ bool operator==(const stats_line& lhs, const stats_line& rhs);
 bool operator<(const stats_line& lhs, const stats_line& rhs);
 
 // For test only
+int qtaguidGetUidStatsInternal(uid_t uid, Stats* stats, const char* path);
+// For test only
+int qtaguidGetIfaceStatsInternal(const char* iface, Stats* stats, const char* path);
+// For test only
 int bpfGetUidStatsInternal(uid_t uid, Stats* stats,
                            const BpfMap<uint32_t, StatsValue>& appUidStatsMap);
 // For test only

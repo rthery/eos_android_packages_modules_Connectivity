@@ -16,6 +16,7 @@
 
 #include <inttypes.h>
 #include <net/if.h>
+#include <stdio.h>
 #include <string.h>
 #include <unordered_set>
 
@@ -45,6 +46,56 @@ using base::Result;
 // from the config value.
 static constexpr char const* STATS_MAP_PATH[] = {STATS_MAP_B_PATH, STATS_MAP_A_PATH};
 
+static constexpr char const* QTAGUID_UID_STATS_PATH = "/proc/net/xt_qtaguid/stats";
+static constexpr char const* QTAGUID_IFACE_STATS_PATH = "/proc/net/xt_qtaguid/iface_stat_fmt";
+
+// Sums the untagged rows of every counter set for uid. Columns: idx iface
+// acct_tag_hex uid_tag_int cnt_set rx_bytes rx_packets tx_bytes tx_packets ...
+int qtaguidGetUidStatsInternal(uid_t uid, Stats* stats, const char* path) {
+    std::string content;
+    if (!android::base::ReadFileToString(path, &content)) return -errno;
+    for (const auto& line : android::base::Split(content, "\n")) {
+        char iface[IFNAMSIZ + 1];
+        uint64_t tag;
+        uint32_t lineUid, set;
+        int64_t rxBytes, rxPackets, txBytes, txPackets;
+        if (sscanf(line.c_str(), "%*d %16s %" SCNx64 " %u %u %" SCNd64 " %" SCNd64 " %" SCNd64
+                   " %" SCNd64, iface, &tag, &lineUid, &set, &rxBytes, &rxPackets, &txBytes,
+                   &txPackets) != 8) {
+            continue;
+        }
+        if (lineUid != uid || (tag >> 32) != 0) continue;
+        stats->rxBytes += rxBytes;
+        stats->rxPackets += rxPackets;
+        stats->txBytes += txBytes;
+        stats->txPackets += txPackets;
+    }
+    return 0;
+}
+
+// Columns: ifname total_skb_rx_bytes total_skb_rx_packets total_skb_tx_bytes
+// total_skb_tx_packets ...
+int qtaguidGetIfaceStatsInternal(const char* iface, Stats* stats, const char* path) {
+    std::string content;
+    if (!android::base::ReadFileToString(path, &content)) return -errno;
+    stats->tcpRxPackets = -1;
+    stats->tcpTxPackets = -1;
+    for (const auto& line : android::base::Split(content, "\n")) {
+        char ifname[IFNAMSIZ + 1];
+        int64_t rxBytes, rxPackets, txBytes, txPackets;
+        if (sscanf(line.c_str(), "%16s %" SCNd64 " %" SCNd64 " %" SCNd64 " %" SCNd64, ifname,
+                   &rxBytes, &rxPackets, &txBytes, &txPackets) != 5) {
+            continue;
+        }
+        if (iface && strcmp(iface, ifname)) continue;
+        stats->rxBytes += rxBytes;
+        stats->rxPackets += rxPackets;
+        stats->txBytes += txBytes;
+        stats->txPackets += txPackets;
+    }
+    return 0;
+}
+
 int bpfGetUidStatsInternal(uid_t uid, Stats* stats,
                            const BpfMap<uint32_t, StatsValue>& appUidStatsMap) {
     auto statsEntry = appUidStatsMap.readValue(uid);
@@ -59,10 +110,9 @@ int bpfGetUidStatsInternal(uid_t uid, Stats* stats,
 }
 
 int bpfGetUidStats(uid_t uid, Stats* stats) {
-    // Legacy kernels cannot open BPF maps. Report unsupported counters before
-    // constructing a map, whose kernel-version check would abort the caller.
+    // Legacy kernels cannot open BPF maps; they count traffic with xt_qtaguid.
     if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
-        return -EOPNOTSUPP;
+        return qtaguidGetUidStatsInternal(uid, stats, QTAGUID_UID_STATS_PATH);
     }
 
     BpfMapRO<uint32_t, StatsValue> appUidStatsMap(APP_UID_STATS_MAP_PATH);
@@ -107,10 +157,9 @@ int bpfGetIfaceStatsInternal(const char* iface, Stats* stats,
 }
 
 int bpfGetIfaceStats(const char* iface, Stats* stats) {
-    // Legacy kernels cannot open BPF maps. Report unsupported counters before
-    // constructing a map, whose kernel-version check would abort the caller.
+    // Legacy kernels cannot open BPF maps; they count traffic with xt_qtaguid.
     if (!android::base::GetBoolProperty("ro.kernel.ebpf.supported", true)) {
-        return -EOPNOTSUPP;
+        return qtaguidGetIfaceStatsInternal(iface, stats, QTAGUID_IFACE_STATS_PATH);
     }
 
     BpfMapRO<uint32_t, StatsValue> ifaceStatsMap(IFACE_STATS_MAP_PATH);
