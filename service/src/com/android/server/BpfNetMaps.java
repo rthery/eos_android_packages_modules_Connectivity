@@ -17,6 +17,7 @@
 package com.android.server;
 
 import static android.system.OsConstants.EOPNOTSUPP;
+import static android.system.OsConstants.EIO;
 
 import android.net.INetd;
 import android.os.RemoteException;
@@ -40,6 +41,8 @@ public class BpfNetMaps {
     // Use legacy netd for releases before T.
     private static final boolean USE_NETD = !SdkLevel.isAtLeastT();
     private static boolean sInitialized = false;
+    // Kernels without eBPF keep per-UID firewall rules in netd's iptables chains.
+    private static boolean sUseNetdChains = false;
 
     /**
      * Initializes the class if it is not already initialized. This method will open maps but not
@@ -50,6 +53,7 @@ public class BpfNetMaps {
         if (!USE_NETD) {
             System.loadLibrary("service-connectivity");
             native_init();
+            sUseNetdChains = !native_isBpfSupported();
         }
         sInitialized = true;
     }
@@ -66,6 +70,21 @@ public class BpfNetMaps {
         mNetd = netd;
     }
 
+    private interface NetdCall {
+        void run() throws RemoteException;
+    }
+
+    /** Returns true if the call went to netd, which happens only on kernels without eBPF. */
+    private boolean callNetdChains(final NetdCall call) {
+        if (!sUseNetdChains || mNetd == null) return false;
+        try {
+            call.run();
+        } catch (RemoteException e) {
+            throw new IllegalStateException(e);
+        }
+        return true;
+    }
+
     private void maybeThrow(final int err, final String msg) {
         if (err != 0) {
             throw new ServiceSpecificException(err, msg + ": " + Os.strerror(err));
@@ -80,6 +99,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void addNaughtyApp(final int uid) {
+        if (callNetdChains(() -> mNetd.bandwidthAddNaughtyApp(uid))) return;
         final int err = native_addNaughtyApp(uid);
         maybeThrow(err, "Unable to add naughty app");
     }
@@ -92,6 +112,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void removeNaughtyApp(final int uid) {
+        if (callNetdChains(() -> mNetd.bandwidthRemoveNaughtyApp(uid))) return;
         final int err = native_removeNaughtyApp(uid);
         maybeThrow(err, "Unable to remove naughty app");
     }
@@ -104,6 +125,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void addNiceApp(final int uid) {
+        if (callNetdChains(() -> mNetd.bandwidthAddNiceApp(uid))) return;
         final int err = native_addNiceApp(uid);
         maybeThrow(err, "Unable to add nice app");
     }
@@ -116,6 +138,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void removeNiceApp(final int uid) {
+        if (callNetdChains(() -> mNetd.bandwidthRemoveNiceApp(uid))) return;
         final int err = native_removeNiceApp(uid);
         maybeThrow(err, "Unable to remove nice app");
     }
@@ -129,6 +152,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void setChildChain(final int childChain, final boolean enable) {
+        if (callNetdChains(() -> mNetd.firewallEnableChildChain(childChain, enable))) return;
         final int err = native_setChildChain(childChain, enable);
         maybeThrow(err, "Unable to set child chain");
     }
@@ -148,6 +172,12 @@ public class BpfNetMaps {
      */
     public int replaceUidChain(final String chainName, final boolean isAllowlist,
             final int[] uids) {
+        final boolean[] replaced = {false};
+        if (callNetdChains(() -> replaced[0] =
+                mNetd.firewallReplaceUidChain(chainName, isAllowlist, uids))) {
+            if (!replaced[0]) Log.e(TAG, "replaceUidChain failed in netd: " + chainName);
+            return replaced[0] ? 0 : EIO;
+        }
         final int err = native_replaceUidChain(chainName, isAllowlist, uids);
         if (err != 0) {
             Log.e(TAG, "replaceUidChain failed: " + Os.strerror(-err));
@@ -165,6 +195,7 @@ public class BpfNetMaps {
      *                                  cause of the failure.
      */
     public void setUidRule(final int childChain, final int uid, final int firewallRule) {
+        if (callNetdChains(() -> mNetd.firewallSetUidRule(childChain, uid, firewallRule))) return;
         final int err = native_setUidRule(childChain, uid, firewallRule);
         maybeThrow(err, "Unable to set uid rule");
     }
@@ -262,6 +293,7 @@ public class BpfNetMaps {
     }
 
     private static native void native_init();
+    private static native boolean native_isBpfSupported();
     private native int native_addNaughtyApp(int uid);
     private native int native_removeNaughtyApp(int uid);
     private native int native_addNiceApp(int uid);

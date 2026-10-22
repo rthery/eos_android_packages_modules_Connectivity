@@ -18,6 +18,7 @@
 
 #include "TrafficController.h"
 
+#include <android-base/properties.h>
 #include <bpf_shared.h>
 #include <jni.h>
 #include <log/log.h>
@@ -44,6 +45,10 @@ static void native_init(JNIEnv* env, jobject clazz) {
    if (!isOk(status)) {
     ALOGE("%s failed, error code = %d", __func__, status.code());
   }
+}
+
+static jboolean native_isBpfSupported(JNIEnv* env, jclass clazz) {
+    return android::base::GetBoolProperty("ro.kernel.ebpf.supported", true);
 }
 
 static jint native_addNaughtyApp(JNIEnv* env, jobject clazz, jint uid) {
@@ -211,6 +216,8 @@ static const JNINativeMethod gMethods[] = {
     /* name, signature, funcPtr */
     {"native_init", "()V",
     (void*)native_init},
+    {"native_isBpfSupported", "()Z",
+    (void*)native_isBpfSupported},
     {"native_addNaughtyApp", "(I)I",
     (void*)native_addNaughtyApp},
     {"native_removeNaughtyApp", "(I)I",
